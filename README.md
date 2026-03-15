@@ -9,6 +9,8 @@
 *Note: This addon is not affiliated with Bombardier Transportation or the Deutsche Bahn Group in any way.*
 
 ---
+Note: This is related to the following vehicle: https://steamcommunity.com/sharedfiles/filedetails/?id=3669180247
+---
 
 ## General Information
 
