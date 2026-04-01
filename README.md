@@ -19,7 +19,7 @@ Note: This is related to the following vehicle: [Steam Workshop Link](https://st
 **Operator:** DB (Deutsche Bahn inspired)  
 **Connector Property:** NOT SRC‑TCP, Proprietary AEX Connector  
 **Front Coupler System:** AEXEL CONNECT V1.1  
-**License:** Open Source – Free to use parts with credit  
+**License:** CC BY-NC-SA 4.0 – Free to use parts with credit  
 **Top Speed:** 140 km/h  
 **Performance Profile:** High–Medium efficiency power usage  
 **Battery Operation:** Low‑speed battery movement supported  
