@@ -1,5 +1,6 @@
 # Notes
 A highly reccomended site to use for lua scripting is https://lua.flaffipony.rocks/ in stormworks build and rescue.
+Additionally check out this repo containing the live update lua docs from the game: https://github.com/gcrtnst/sw-luadocs/tree/main/data/latest/
 
 # Stormworks Lua Scripting Documentation
 
