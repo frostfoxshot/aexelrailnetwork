@@ -319,7 +319,7 @@ A detailed PDF manual will be available soon. Check the [Steam Workshop](https:/
 ## Contact & Support
 
 - **Workshop Comments:** Leave feedback or issues on the [Steam Workshop page](https://steamcommunity.com/sharedfiles/filedetails/?id=3669180247)  
-- **GitHub:** [Report bugs / Contribute](https://github.com/frostfoxshot/aex-442-locomoive)  
+- **GitHub:** [Report bugs / Contribute](https://github.com/frostfoxshot/aexelrailnetwork/tree/main/stormworks/aex442)  
 
 ---
 
