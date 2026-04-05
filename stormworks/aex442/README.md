@@ -44,8 +44,8 @@ Note: This is related to the following vehicle: [Steam Workshop Link](https://st
 
 ## Version Information
 
-**Version:** v1.1  
-**Release Date:** March 2026  
+**Version:** v1.2  
+**Release Date:** April 2026  
 **Status:** Stable Public Release
 
 ---
@@ -304,6 +304,10 @@ A detailed PDF manual will be available soon. Check the [Steam Workshop](https:/
 ---
 
 ## Changelog
+
+**v1.2 – 05th April 2026**  
+- Added high horn and low horn
+  - Added High horn cut off for infinite electric servers 
 
 **v1.1 – 15th March 2026**  
 - Passenger cabin redesign  
