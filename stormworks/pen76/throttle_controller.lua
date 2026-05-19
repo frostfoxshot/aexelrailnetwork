@@ -4,9 +4,8 @@ local sn, sb = output.setNumber, output.setBool
 -- Tunables
 local TICKS_PER_SEC = 60
 
--- 1% initial bite, short delay, then 3 sec to full
 local INITIAL_STEP = 0.01
-local RAMP_DELAY_TICKS = 12 -- 0.2 sec
+local RAMP_DELAY_TICKS = 12
 local THR_UP_RATE = 1 / (3 * TICKS_PER_SEC)
 local BRK_UP_RATE = 1 / (3 * TICKS_PER_SEC)
 
@@ -14,11 +13,17 @@ local THR_DOWN_RATE = 0.020
 local BRK_DOWN_RATE = 0.020
 local LOCAL_BRK_RATE = 1 / (3 * TICKS_PER_SEC)
 
--- Regen/friction blend speeds
 local SPEED_REGEN_FADE_START = 8.3333 -- 30 km/h
 local SPEED_FULL_FRICTION    = 4.4444 -- 16 km/h
 
 local GRACE_TICKS = 12
+
+-- ARN tuning
+local ARN_OVERSPEED_CUT_ONLY = true
+local ARN_MIN_BRAKE = 0.12
+local ARN_MAX_BRAKE = 0.90
+local ARN_SERVICE_DECEL = 0.75
+local ARN_COMFORT_DECEL = 0.45
 
 -- State memory
 local mainState = 3
@@ -40,9 +45,9 @@ local mainBrakeDelay = 0
 local localBrakeDelay = 0
 
 local function clamp(x, a, b)
-    if x < a then return a
-    elseif x > b then return b
-    else return x end
+    if x < a then return a end
+    if x > b then return b end
+    return x
 end
 
 local function mainStateToPivot(state)
@@ -89,13 +94,83 @@ local function delayedRampUp(value, rate, delayName)
     return clamp(value + rate, 0, 1)
 end
 
+local function calculateArnBrake(speedMS, limitKmh, targetKmh, distM)
+    local speedKmh = speedMS * 3.6
+    local demand = 0
+
+    -- Current limit overspeed demand
+    if limitKmh > 0 and speedKmh > limitKmh then
+        local over = speedKmh - limitKmh
+        demand = math.max(demand, clamp(over / 30, ARN_MIN_BRAKE, 0.75))
+    end
+
+    -- Braking curve demand to upcoming target
+    if targetKmh > 0 and distM > 0 and speedKmh > targetKmh then
+        local v = speedMS
+        local u = targetKmh / 3.6
+
+        local neededDecel = ((v * v) - (u * u)) / (2 * distM)
+        if neededDecel < 0 then neededDecel = 0 end
+
+        local decelDemand = neededDecel / ARN_SERVICE_DECEL
+        local comfortDemand = neededDecel / ARN_COMFORT_DECEL
+
+        demand = math.max(demand, clamp(decelDemand, ARN_MIN_BRAKE, ARN_MAX_BRAKE))
+
+        -- Extra pressure if we are well beyond comfortable braking
+        if comfortDemand > 1 then
+            demand = math.max(demand, clamp(comfortDemand * 0.7, 0.35, ARN_MAX_BRAKE))
+        end
+    end
+
+    return clamp(demand, 0, ARN_MAX_BRAKE)
+end
+
+local function splitBrakeBySpeed(brakeDemand, speedMS)
+    local brakeOut = 0
+    local regenOut = 0
+
+    if brakeDemand <= 0 then
+        return 0, 0
+    end
+
+    if speedMS >= SPEED_REGEN_FADE_START then
+        regenOut = brakeDemand
+        brakeOut = 0
+
+    elseif speedMS <= SPEED_FULL_FRICTION then
+        regenOut = 0
+        brakeOut = brakeDemand
+
+    else
+        local blend = (speedMS - SPEED_FULL_FRICTION) /
+                      (SPEED_REGEN_FADE_START - SPEED_FULL_FRICTION)
+
+        regenOut = brakeDemand * blend
+        brakeOut = brakeDemand * (1 - blend)
+    end
+
+    return brakeOut, regenOut
+end
+
 function onTick()
     local revSel  = gn(1) or 0
     local ws      = gn(2) or 0
     local ud      = gn(3) or 0
     local speed   = gn(4) or 0
+
+    -- ARN number inputs
+    local arnLimit  = gn(5) or 0
+    local arnTarget = gn(6) or 0
+    local arnDist   = gn(7) or 0
+
     local master  = gb(1)
     local resetEB = gb(2)
+
+    -- ARN bool inputs
+    local arnActive    = gb(3)
+    local arnOverspeed = gb(4)
+    local arnIntervene = gb(5)
 
     local dirSign = 0
     local revBool = false
@@ -309,26 +384,37 @@ function onTick()
 
         if finalBrake > 0 then
             throttleOut = 0
-
-            if speed >= SPEED_REGEN_FADE_START then
-                regenOut = finalBrake
-                brakeOut = 0
-
-            elseif speed <= SPEED_FULL_FRICTION then
-                regenOut = 0
-                brakeOut = finalBrake
-
-            else
-                local blend = (speed - SPEED_FULL_FRICTION) /
-                              (SPEED_REGEN_FADE_START - SPEED_FULL_FRICTION)
-
-                regenOut = finalBrake * blend
-                brakeOut = finalBrake * (1 - blend)
-            end
+            brakeOut, regenOut = splitBrakeBySpeed(finalBrake, speed)
         end
     end
 
-    local coast = throttleOut < 0.001 and finalBrake < 0.001
+    -- ARN SUPERVISION
+    -- ARN does absolutely nothing unless arnActive is true.
+    if arnActive and not EB then
+
+        -- Overspeed warning/intervention stage:
+        -- cut throttle only, do not apply brake unless arnIntervene is also true.
+        if arnOverspeed then
+            throttleOut = 0
+            tractionMem = 0
+            throttleDelay = 0
+        end
+
+        -- Brake intervention:
+        -- cut throttle and apply calculated service brake.
+        if arnIntervene then
+            local arnBrake = calculateArnBrake(speed, arnLimit, arnTarget, arnDist)
+            local supervisedBrake = math.max(finalBrake, arnBrake)
+
+            throttleOut = 0
+            tractionMem = 0
+            throttleDelay = 0
+
+            brakeOut, regenOut = splitBrakeBySpeed(supervisedBrake, speed)
+        end
+    end
+
+    local coast = throttleOut < 0.001 and finalBrake < 0.001 and not arnIntervene
 
     sn(1, clamp(throttleOut, 0, 1))
     sn(2, clamp(brakeOut, 0, 1))
@@ -347,6 +433,9 @@ function onTick()
     sb(3, coast)
     sb(4, revBool)
     sb(5, neutral)
+    sb(6, arnActive)
+    sb(7, arnOverspeed)
+    sb(8, arnIntervene)
 
     lastWS = ws
     lastUD = ud
