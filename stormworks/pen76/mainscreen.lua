@@ -1,357 +1,304 @@
--- AEX EN76 Style Centre Screen v2.0 (3x2, ARN braking curve overlay)
---
--- INPUT MAP
--- Bool 1: Touch 1 pressed
--- Bool 2: Touch 2 pressed
--- Bool 3: ARN active
--- Bool 4: Overspeed warning
--- Bool 5: Brake intervention
--- Bool 6: Door interlock / doors closed
--- Bool 7: Master on
--- Bool 8: Reverse bool (false=fwd, true=rev)
---
--- Number 1: Screen width passthrough (optional)
--- Number 2: Screen height passthrough (optional)
--- Number 3: Touch 1 X
--- Number 4: Touch 1 Y
--- Number 5: Touch 2 X
--- Number 6: Touch 2 Y
--- Number 7: Current speed km/h
--- Number 8: Friction brake %
--- Number 9: Traction %
--- Number 10: Regen brake %
--- Number 11: Current limit km/h
--- Number 12: Target speed km/h
--- Number 13: Distance to target m
--- Number 14: Authority remaining m
+-- AEX EN76 Centre Speed Dial v4.4
+-- 350 km/h dial / 220 mph dial
+-- Major marks every 50
+-- Bool Out 1 = Night mode
+-- Bool Out 2 = MPH mode
 
 local W,H=96,64
+
 local p1,p2=false,false
-local t1x,t1y,t2x,t2y=0,0,0,0
 local p1p,p2p=false,false
+local t1x,t1y,t2x,t2y=0,0,0,0
 
-local spd=0
-local brk=0
-local trac=0
-local regen=0
-local limit=160
-local target=0
-local distT=0
-local authRem=0
+local spd,brk,trac,regen=0,0,0,0
+local vmax,target,distT,authRem=160,0,0,0
 
-local arn=false
-local overspeed=false
-local intervene=false
-local doors=true
-local master=false
-local rev=false
+local arn,overspeed,intervene=false,false,false
+local doors,master,rev=true,false,false
 
 local M_NIGHT=false
 local M_MPH=false
-
+local tick=0
+local tripKM=0
 local BTN={}
 
--- ARN braking curve tuning
-local SERVICE_DECEL = 0.75 -- m/s^2
-local WARN_MARGIN_M = 35   -- start showing more urgent warning when close
-local CURVE_MAX_KMH = 160
+local SERVICE_DECEL=0.75
+local TICKS_PER_SECOND=60
 
 local function clamp(x,a,b)
     if x<a then return a elseif x>b then return b else return x end
 end
 
-local function lerp(a,b,t)
-    return a+(b-a)*t
-end
+local function C(r,g,b) screen.setColor(r,g,b) end
+local function C3(c) screen.setColor(c[1],c[2],c[3]) end
+local function lerp(a,b,t) return a+(b-a)*t end
+local function hit(x,y,w,h,px,py) return px>=x and px<=x+w and py>=y and py<=y+h end
 
-local function C3(c)
-    screen.setColor(c[1],c[2],c[3])
+local function fmt3(n)
+    n=math.floor(math.max(n,0)+0.5)
+    if n>999 then n=999 end
+    return string.format("%03d",n)
 end
-
-local function rect(x,y,w,h,f)
-    if f then screen.drawRectF(x,y,w,h) else screen.drawRect(x,y,w,h) end
-end
-
-local function hit(x,y,w,h,px,py)
-    return px>=x and px<=x+w and py>=y and py<=y+h
-end
-
-local function panel(x,y,w,h,FACE,EDGE)
-    C3(FACE)
-    rect(x,y,w,h,true)
-    C3(EDGE)
-    rect(x,y,w,h,false)
-end
-
-local BG_DAY   ={18,36,64}
-local BG_NGT   ={6,12,22}
-local FG_DAY   ={255,255,255}
-local FG_NGT   ={230,240,255}
-local DIM_D    ={170,190,220}
-local DIM_N    ={120,150,190}
-local FACE_D   ={28,50,85}
-local FACE_N   ={10,14,20}
-local EDGE_D   ={90,130,180}
-local EDGE_N   ={28,38,54}
-local BLUE_D   ={120,200,255}
-local BLUE_N   ={75,135,220}
-local GREEN_D  ={120,255,160}
-local GREEN_N  ={70,180,95}
-local AMBER_D  ={255,200,90}
-local AMBER_N  ={220,155,60}
-local RED_D    ={255,80,80}
-local RED_N    ={220,70,70}
-local CYAN_D   ={150,240,255}
-local CYAN_N   ={85,180,220}
-local PURPLE_D ={210,150,255}
-local PURPLE_N ={140,110,200}
 
 local function pal()
     if M_NIGHT then
-        return BG_NGT,FG_NGT,DIM_N,FACE_N,EDGE_N,BLUE_N,GREEN_N,AMBER_N,RED_N,CYAN_N,PURPLE_N
+        return
+        {2,5,9},{235,245,255},{70,95,125},{7,11,17},{25,38,55},
+        {45,125,220},{65,210,110},{245,165,45},{255,55,55},
+        {90,225,255},{170,110,255},{255,115,35}
     else
-        return BG_DAY,FG_DAY,DIM_D,FACE_D,EDGE_D,BLUE_D,GREEN_D,AMBER_D,RED_D,CYAN_D,PURPLE_D
+        return
+        {14,28,50},{255,255,255},{120,145,180},{24,45,78},{65,105,160},
+        {75,165,245},{90,245,145},{255,180,55},{255,65,65},
+        {120,235,255},{205,140,255},{255,105,25}
     end
+end
+
+local function panel(x,y,w,h,face,edge)
+    C3(face)
+    screen.drawRectF(x,y,w,h)
+    C3(edge)
+    screen.drawRect(x,y,w,h)
 end
 
 local function drawArc(cx,cy,r,a1,a2,col,steps)
     C3(col)
     local px,py=nil,nil
+
     for i=0,steps do
         local t=i/steps
         local a=lerp(a1,a2,t)
         local x=cx+math.cos(a)*r
         local y=cy+math.sin(a)*r
-        if px then screen.drawLine(px,py,x,y) end
+
+        if px then
+            screen.drawLine(px,py,x,y)
+        end
+
         px,py=x,y
     end
 end
 
-local function drawRingSegment(cx,cy,r1,r2,a1,a2,col,steps)
-    if a2 < a1 then
+local function drawRing(cx,cy,r1,r2,a1,a2,col,steps)
+    if a2<a1 then
         local tmp=a1
         a1=a2
         a2=tmp
     end
-    for rr=r1,r2 do
-        drawArc(cx,cy,rr,a1,a2,col,steps)
+
+    for r=r1,r2 do
+        drawArc(cx,cy,r,a1,a2,col,steps)
     end
 end
 
 local function speedAngle(v,maxV)
-    local n=clamp(v/maxV,0,1)
-    return math.rad(140 + n*260)
+    return math.rad(140 + clamp(v/maxV,0,1)*260)
 end
 
 local function drawMarker(cx,cy,r,a,col,len)
     C3(col)
-    local x1=cx+math.cos(a)*(r-len)
-    local y1=cy+math.sin(a)*(r-len)
-    local x2=cx+math.cos(a)*r
-    local y2=cy+math.sin(a)*r
-    screen.drawLine(x1,y1,x2,y2)
+    screen.drawLine(
+        cx+math.cos(a)*(r-len),
+        cy+math.sin(a)*(r-len),
+        cx+math.cos(a)*r,
+        cy+math.sin(a)*r
+    )
 end
 
 local function brakingCurveInfo(curKmh,tgtKmh,distM)
-    if distM <= 0 or tgtKmh <= 0 and curKmh <= 0 then
-        return 0, false, false
+    if tgtKmh<=0 or distM<=0 then
+        return 0,false,false
     end
 
-    local v = math.max(curKmh,0) / 3.6
-    local u = math.max(tgtKmh,0) / 3.6
-    local d = math.max(distM,0.1)
+    local v=math.max(curKmh,0)/3.6
+    local u=math.max(tgtKmh,0)/3.6
+    local d=math.max(distM,0.1)
 
-    local need = ((v*v) - (u*u)) / (2 * SERVICE_DECEL)
-    if need < 0 then need = 0 end
+    local need=((v*v)-(u*u))/(2*SERVICE_DECEL)
 
-    local ratio = need / d
-    local onCurve = ratio >= 0.75
-    local urgent = ratio >= 1.0 or distM <= WARN_MARGIN_M
+    if need<0 then need=0 end
 
-    return ratio, onCurve, urgent
+    local ratio=need/d
+
+    return ratio,ratio>=0.75,ratio>=1.0
 end
 
-local function drawDial(cx,cy,r,spdV,maxV,limitV,targetV,tracPct,brkPct,regenPct,distM,FG,DIM,BLUE,GREEN,AMBER,RED,CYAN,PURPLE)
-    screen.setColor(8,10,14)
-    screen.drawCircleF(cx,cy,r+2)
-    screen.setColor(18,24,34)
-    screen.drawCircleF(cx,cy,r)
+local function drawBar(x,y,w,h,val,col,edge)
+    C(8,10,14)
+    screen.drawRectF(x,y,w,h)
 
-    local safeTo=clamp(limitV/maxV,0,1)
-    local safeA=math.rad(140)
-    local warnA=math.rad(140 + safeTo*260)
+    C3(edge)
+    screen.drawRect(x,y,w,h)
 
-    -- outer line speed ring
-    drawRingSegment(cx,cy,r-2,r,safeA,warnA,BLUE,48)
-    if limitV < maxV then
-        drawRingSegment(cx,cy,r-2,r,warnA,math.rad(400),RED,28)
+    local f=math.floor(clamp(val,0,100)/100*(w-2))
+
+    if f>0 then
+        C3(col)
+        screen.drawRectF(x+1,y+1,f,h-2)
+    end
+end
+
+local function drawNeedle(cx,cy,r,a,needleCol)
+    local tipX=cx+math.cos(a)*(r-6)
+    local tipY=cy+math.sin(a)*(r-6)
+
+    local sideA=a+math.pi/2
+    local w=3
+
+    local leftX=cx+math.cos(sideA)*w
+    local leftY=cy+math.sin(sideA)*w
+    local rightX=cx-math.cos(sideA)*w
+    local rightY=cy-math.sin(sideA)*w
+
+    C(0,0,0)
+    screen.drawTriangleF(tipX+1,tipY+1,leftX+1,leftY+1,rightX+1,rightY+1)
+
+    C3(needleCol)
+    screen.drawTriangleF(tipX,tipY,leftX,leftY,rightX,rightY)
+
+    C(0,0,0)
+    screen.drawCircleF(cx,cy,4)
+
+    C3(needleCol)
+    screen.drawCircle(cx,cy,3)
+
+    C(235,245,255)
+    screen.drawCircleF(cx,cy,1)
+end
+
+local function drawDial(cx,cy,r,FG,DIM,BLUE,GREEN,AMBER,RED,CYAN,PURPLE,NEEDLE)
+    local maxV=M_MPH and 220 or 350
+    local s=M_MPH and spd*0.621371 or spd
+    local lim=M_MPH and vmax*0.621371 or vmax
+    local tgt=M_MPH and target*0.621371 or target
+
+    C(3,6,12)
+    screen.drawCircleF(cx,cy,r+3)
+
+    C(11,17,27)
+    screen.drawCircleF(cx,cy,r+1)
+
+    C(5,8,14)
+    screen.drawCircleF(cx,cy,r-4)
+
+    local startA=math.rad(140)
+    local endA=math.rad(400)
+    local limA=speedAngle(lim,maxV)
+
+    drawRing(cx,cy,r-1,r+1,startA,endA,DIM,56)
+    drawRing(cx,cy,r-1,r+1,startA,limA,BLUE,46)
+
+    if lim<maxV then
+        drawRing(cx,cy,r-1,r+1,limA,endA,RED,30)
     end
 
-    -- ARN braking curve overlay
-    if targetV > 0 and distM > 0 then
-        local curveRatio, onCurve, urgent = brakingCurveInfo(spdV,targetV,distM)
-        local curveCol = urgent and RED or (onCurve and AMBER or PURPLE)
-        local curA = speedAngle(spdV,maxV)
-        local tgtA = speedAngle(targetV,maxV)
-        drawRingSegment(cx,cy,r-6,r-4,tgtA,curA,curveCol,24)
+    if arn and tgt>0 and distT>0 then
+        local ratio,onCurve,urgent=brakingCurveInfo(spd,target,distT)
+        local col=urgent and RED or (onCurve and AMBER or PURPLE)
+
+        drawRing(
+            cx,cy,
+            r-7,r-5,
+            speedAngle(tgt,maxV),
+            speedAngle(s,maxV),
+            col,
+            24
+        )
     end
 
-    -- ticks
+    if trac>0.1 then
+        drawRing(
+            cx,cy,
+            r-12,r-10,
+            math.rad(270),
+            math.rad(270+clamp(trac/100,0,1)*70),
+            GREEN,
+            14
+        )
+    end
+
+    local brakeTotal=clamp((brk+regen)/100,0,1)
+
+    if brakeTotal>0.01 then
+        drawRing(
+            cx,cy,
+            r-12,r-10,
+            math.rad(270-brakeTotal*70),
+            math.rad(270),
+            AMBER,
+            14
+        )
+    end
+
+    -- Minor marks every 10
     for k=0,maxV,10 do
         local a=speedAngle(k,maxV)
-        local major=(k%20==0)
-        local r1=major and (r-2) or (r-1)
-        local r2=major and (r-9) or (r-6)
+
         C3(DIM)
-        screen.drawLine(cx+math.cos(a)*r1, cy+math.sin(a)*r1, cx+math.cos(a)*r2, cy+math.sin(a)*r2)
+
+        screen.drawLine(
+            cx+math.cos(a)*(r-2),
+            cy+math.sin(a)*(r-2),
+            cx+math.cos(a)*(r-5),
+            cy+math.sin(a)*(r-5)
+        )
     end
 
-    -- traction/brake inner arcs
-    local tracN=clamp(tracPct/100,0,1)
-    local brkN=clamp((brkPct+regenPct)/100,0,1)
+    -- Major marks every 50
+    for k=0,maxV,50 do
+        local a=speedAngle(k,maxV)
 
-    if tracN>0 then
-        drawRingSegment(cx,cy,r-13,r-10,math.rad(270),math.rad(270 + tracN*90),GREEN,20)
-    end
-    if brkN>0 then
-        drawRingSegment(cx,cy,r-13,r-10,math.rad(270 - brkN*90),math.rad(270),AMBER,20)
-    end
+        C(230,240,255)
 
-    -- markers
-    drawMarker(cx,cy,r+1,speedAngle(limitV,maxV),CYAN,11)
-    if targetV>0 then
-        drawMarker(cx,cy,r+1,speedAngle(targetV,maxV),AMBER,8)
+        screen.drawLine(
+            cx+math.cos(a)*(r-2),
+            cy+math.sin(a)*(r-2),
+            cx+math.cos(a)*(r-10),
+            cy+math.sin(a)*(r-10)
+        )
     end
 
-    -- needle
-    local a=speedAngle(spdV,maxV)
-    C3(FG)
-    screen.drawLine(cx,cy,cx+math.cos(a)*(r-15),cy+math.sin(a)*(r-15))
-    screen.drawLine(cx+1,cy,cx+math.cos(a)*(r-15)+1,cy+math.sin(a)*(r-15))
-    screen.drawCircleF(cx,cy,2)
+    drawMarker(cx,cy,r+2,speedAngle(lim,maxV),CYAN,10)
 
-    -- centre readout
-    C3(FG)
-    screen.drawTextBox(cx-r*0.62, cy-13, r*1.24, 12, string.format("%3.0f", spdV), 0, 0)
-    C3(DIM)
-    screen.drawTextBox(cx-r*0.62, cy+1, r*1.24, 8, M_MPH and "mph" or "km/h", 0, 0)
-
-    C3(CYAN)
-    screen.drawTextBox(cx-r*0.62, cy+11, r*1.24, 8, string.format("LIM %3.0f", limitV), 0, 0)
-    if targetV>0 then
-        C3(AMBER)
-        screen.drawTextBox(cx-r*0.62, cy+19, r*1.24, 8, string.format("TGT %3.0f", targetV), 0, 0)
+    if tgt>0 then
+        drawMarker(cx,cy,r+2,speedAngle(tgt,maxV),AMBER,8)
     end
+
+    drawNeedle(cx,cy,r,speedAngle(s,maxV),NEEDLE)
 end
 
-local function drawBar(x,y,w,h,val,col,EDGE)
-    screen.setColor(12,16,22)
-    screen.drawRectF(x,y,w,h)
-    C3(EDGE)
-    screen.drawRect(x,y,w,h)
-    local fill=math.floor(clamp(val,0,100)/100*(w-2))
-    if fill>0 then
-        C3(col)
-        screen.drawRectF(x+1,y+1,fill,h-2)
-    end
-end
+local function statusText()
+    local ratio,onCurve,urgent=brakingCurveInfo(spd,target,distT)
 
-local function drawInfoPanel(x,y,w,h,FG,DIM,FACE,EDGE,GREEN,AMBER,RED,CYAN,PURPLE)
-    panel(x,y,w,h,FACE,EDGE)
+    if intervene then return "INTERVENTION","red" end
+    if overspeed then return "OVERSPEED","red" end
+    if arn and target>0 and urgent then return "CURVE","red" end
+    if arn and target>0 and onCurve then return "APPROACH","amber" end
+    if not master then return "MASTER OFF","amber" end
+    if not doors then return "DOORS","amber" end
+    if trac>0.1 then return "POWER","green" end
+    if brk+regen>0.1 then return "BRAKING","amber" end
+    if arn then return "READY","green" end
 
-    local yy=y+3
-    local row=7
-
-    C3(FG)   screen.drawText(x+3,yy,"SYSTEM"); yy=yy+row
-    C3(DIM)  screen.drawText(x+3,yy,arn and "ARN ACTIVE" or "ARN OFF"); yy=yy+row
-
-    C3(FG)   screen.drawText(x+3,yy,"AUTH"); yy=yy+row
-    C3(CYAN) screen.drawText(x+3,yy,string.format("%4.0fm", authRem)); yy=yy+row
-
-    C3(FG)   screen.drawText(x+3,yy,"TARGET"); yy=yy+row
-    C3(AMBER) screen.drawText(x+3,yy,string.format("%3.0f", target)); yy=yy+row
-
-    C3(FG)   screen.drawText(x+3,yy,"DIST"); yy=yy+row
-    C3(CYAN) screen.drawText(x+3,yy,string.format("%4.0fm", distT)); yy=yy+row
-
-    C3(FG)   screen.drawText(x+3,yy,"DIR"); yy=yy+row
-    C3(DIM)  screen.drawText(x+3,yy,rev and "REV" or "FWD"); yy=yy+row
-
-    C3(FG)   screen.drawText(x+3,yy,"READY"); yy=yy+row
-    if master and doors and not intervene then C3(GREEN) else C3(RED) end
-    local txt = master and (doors and "YES" or "DOOR") or "OFF"
-    screen.drawText(x+3,yy,txt)
-
-    local bx=x+2
-    local bw=w-4
-    local by=y+h-20
-
-    C3(DIM) screen.drawText(bx,by-7,"TRAC")
-    drawBar(bx,by,bw,5,trac,GREEN,EDGE)
-
-    C3(DIM) screen.drawText(bx,by+7,"BRK")
-    drawBar(bx,by+14,bw,5,brk+regen,AMBER,EDGE)
-end
-
-local function drawBottomStrip(x,y,w,h,FG,DIM,GREEN,AMBER,RED,PURPLE,FACE,EDGE)
-    panel(x,y,w,h,FACE,EDGE)
-
-    local msg="COAST"
-    local col=DIM
-
-    local curveRatio,onCurve,urgent = brakingCurveInfo(spd,target,distT)
-
-    if intervene then
-        msg="BRAKE INTERVENTION"
-        col=RED
-    elseif overspeed then
-        msg="OVERSPEED"
-        col=RED
-    elseif arn and target > 0 and urgent then
-        msg="BRAKE CURVE"
-        col=RED
-    elseif arn and target > 0 and onCurve then
-        msg="APPROACH TARGET"
-        col=AMBER
-    elseif not master then
-        msg="MASTER OFF"
-        col=AMBER
-    elseif not doors then
-        msg="DOOR INTERLOCK"
-        col=AMBER
-    elseif trac > 0.1 then
-        msg="POWER"
-        col=GREEN
-    elseif (brk+regen) > 0.1 then
-        msg="BRAKING"
-        col=AMBER
-    elseif arn then
-        msg="READY"
-        col=GREEN
-    end
-
-    C3(col)
-    screen.drawTextBox(x+2,y+1,w-4,h-2,msg,0,0)
-end
-
-local function drawTinyBtn(x,y,w,h,label,active,FACE,EDGE,FG,GREEN)
-    panel(x,y,w,h,FACE,EDGE)
-    if active then
-        C3(GREEN)
-        rect(x+1,y+1,w-2,h-2,true)
-        screen.setColor(5,8,12)
-    else
-        C3(FG)
-    end
-    screen.drawTextBox(x,y+1,w,h-2,label,0,0)
+    return "LOCAL","dim"
 end
 
 function onTick()
+    tick=tick+1
+
     p1=input.getBool(1) or false
     p2=input.getBool(2) or false
 
+    arn=input.getBool(3) or false
+    overspeed=input.getBool(4) or false
+    intervene=input.getBool(5) or false
+    doors=input.getBool(6) or false
+    master=input.getBool(7) or false
+    rev=input.getBool(8) or false
+
     W=input.getNumber(1) or W
     H=input.getNumber(2) or H
+
     t1x=input.getNumber(3) or 0
     t1y=input.getNumber(4) or 0
     t2x=input.getNumber(5) or 0
@@ -361,21 +308,22 @@ function onTick()
     brk=input.getNumber(8) or 0
     trac=input.getNumber(9) or 0
     regen=input.getNumber(10) or 0
-    limit=input.getNumber(11) or 160
+
+    vmax=input.getNumber(11) or 160
     target=input.getNumber(12) or 0
     distT=input.getNumber(13) or 0
     authRem=input.getNumber(14) or 0
 
-    arn=input.getBool(3) or false
-    overspeed=input.getBool(4) or false
-    intervene=input.getBool(5) or false
-    doors=input.getBool(6) or false
-    master=input.getBool(7) or false
-    rev=input.getBool(8) or false
+    if master and spd>0.05 then
+        tripKM=tripKM+(spd/3600)/60
+    end
+
+    output.setBool(1,M_NIGHT)
+    output.setBool(2,M_MPH)
 end
 
 function onDraw()
-    local BG,FG,DIM,FACE,EDGE,BLUE,GREEN,AMBER,RED,CYAN,PURPLE=pal()
+    local BG,FG,DIM,FACE,EDGE,BLUE,GREEN,AMBER,RED,CYAN,PURPLE,NEEDLE=pal()
 
     local sW,sH=screen.getWidth(),screen.getHeight()
     if sW>0 and sH>0 then
@@ -385,57 +333,132 @@ function onDraw()
     C3(BG)
     screen.drawRectF(0,0,W,H)
 
-    local headerH=8
-    local bottomH=8
-    local btnH=8
-    local bodyY=headerH+1
-    local bodyH=H-headerH-bottomH-btnH-3
-    if bodyH < 20 then bodyH=20 end
+    local flash=(math.floor(tick/12)%2)==0
 
-    panel(0,0,W,headerH,FACE,EDGE)
+    -- Header
+    panel(0,0,W,8,FACE,EDGE)
+
     C3(DIM)
-    screen.drawText(2,1,"PEN76")
+    screen.drawText(2,1,"EN76")
+
+    C3(arn and GREEN or AMBER)
+    screen.drawTextBox(0,1,W-2,6,arn and "ARN" or "LOCAL",1,0)
+
+    -- Left speed/trip
+    local lx=2
+    local ly=13
+
+    local shownSpd=M_MPH and spd*0.621371 or spd
+    local shownTrip=M_MPH and tripKM*0.621371 or tripKM
+    local unitSpd=M_MPH and "mph" or "kmh"
+    local unitTrip=M_MPH and "Mi" or "km"
+
     C3(FG)
-    screen.drawTextBox(0,1,W-2,6,arn and "CENTRE DMI" or "LOCAL MODE",1,0)
+    screen.drawTextBox(lx,ly,28,10,fmt3(shownSpd),0,0)
 
-    -- 3x2 layout
-    local leftW=math.floor(W*0.62)
-    local rightW=W-leftW-1
+    C3(CYAN)
+    screen.drawTextBox(lx,ly+10,28,6,unitSpd,0,0)
 
-    local dialCx=math.floor(leftW/2)
-    local dialCy=bodyY + math.floor(bodyH*0.54)
-    local dialR=math.floor(math.min(leftW,bodyH)*0.48)
+    C3(EDGE)
+    screen.drawLine(lx,ly+20,lx+28,ly+20)
 
-    local maxV = M_MPH and 100 or CURVE_MAX_KMH
-    local shownSpd = M_MPH and (spd*0.621371) or spd
-    local shownLimit = M_MPH and (limit*0.621371) or limit
-    local shownTarget = M_MPH and (target*0.621371) or target
+    C3(FG)
+    screen.drawTextBox(lx,ly+25,30,8,string.format("%03.0f%s",shownTrip,unitTrip),0,0)
 
-    drawDial(
-        dialCx,dialCy,dialR,
-        shownSpd,maxV,shownLimit,shownTarget,
-        trac,brk,regen,distT,
-        FG,DIM,BLUE,GREEN,AMBER,RED,CYAN,PURPLE
-    )
+    -- Centre dial
+    local bottomH=16
+    local dialR=math.floor(math.min(W-52,H-bottomH-8)*0.50)
 
-    drawInfoPanel(leftW+1,bodyY,rightW,bodyH,FG,DIM,FACE,EDGE,GREEN,AMBER,RED,CYAN,PURPLE)
-    drawBottomStrip(0,H-bottomH-btnH,W,bottomH,FG,DIM,GREEN,AMBER,RED,PURPLE,FACE,EDGE)
+    if dialR<16 then
+        dialR=16
+    end
 
-    -- only 2 buttons
-    local by=H-btnH
-    local bw=math.floor((W-6)/2)
+    local cx=50
+    local cy=34
+
+    drawDial(cx,cy,dialR,FG,DIM,BLUE,GREEN,AMBER,RED,CYAN,PURPLE,NEEDLE)
+
+    -- Right AUTH/DIST
+    local sx=W-22
+    local sy=13
+
+    panel(sx,sy,20,28,FACE,EDGE)
+
+    C3(DIM)
+    screen.drawTextBox(sx,sy+2,20,5,"AUTH",0,0)
+
+    C3(CYAN)
+    screen.drawTextBox(sx,sy+8,20,7,string.format("%04.0f",authRem),0,0)
+
+    C3(EDGE)
+    screen.drawLine(sx+2,sy+16,sx+18,sy+16)
+
+    C3(DIM)
+    screen.drawTextBox(sx,sy+18,20,5,"DIST",0,0)
+
+    C3(target>0 and AMBER or DIM)
+    screen.drawTextBox(sx,sy+24,20,7,string.format("%04.0f",distT),0,0)
+
+    -- Status strip
+    local msg,kind=statusText()
+    local col=DIM
+
+    if kind=="red" then col=RED
+    elseif kind=="amber" then col=AMBER
+    elseif kind=="green" then col=GREEN end
+
+    if kind=="red" and flash then
+        C3(RED)
+        screen.drawRectF(0,H-16,W,8)
+        C(0,0,0)
+    else
+        panel(0,H-16,W,8,FACE,EDGE)
+        C3(col)
+    end
+
+    screen.drawTextBox(1,H-15,W-2,6,msg,0,0)
+
+    -- Bottom traction/brake bars
+    C3(DIM)
+    screen.drawText(2,H-7,"T")
+    drawBar(9,H-7,22,5,trac,GREEN,EDGE)
+
+    C3(DIM)
+    screen.drawText(34,H-7,"B")
+    drawBar(41,H-7,22,5,brk+regen,AMBER,EDGE)
+
+    -- Buttons: N = night, M = mph
+    local by=H-8
+
     BTN={
-        {x=2,y=by+1,w=bw,h=btnH-2,kind=1},
-        {x=4+bw,y=by+1,w=bw,h=btnH-2,kind=2},
+        {x=W-27,y=by+1,w=12,h=6,kind=1},
+        {x=W-14,y=by+1,w=12,h=6,kind=2}
     }
 
-    drawTinyBtn(BTN[1].x,BTN[1].y,BTN[1].w,BTN[1].h,"NGT",M_NIGHT,FACE,EDGE,FG,GREEN)
-    drawTinyBtn(BTN[2].x,BTN[2].y,BTN[2].w,BTN[2].h,"MPH",M_MPH,FACE,EDGE,FG,GREEN)
+    for i=1,#BTN do
+        local b=BTN[i]
+        local active=(b.kind==1 and M_NIGHT) or (b.kind==2 and M_MPH)
+
+        panel(b.x,b.y,b.w,b.h,FACE,EDGE)
+
+        C3(active and GREEN or FG)
+
+        screen.drawTextBox(
+            b.x,
+            b.y+1,
+            b.w,
+            b.h-1,
+            b.kind==1 and "N" or "M",
+            0,
+            0
+        )
+    end
 
     local function press(px,py,was,is)
         if is and not was then
             for i=1,#BTN do
                 local b=BTN[i]
+
                 if hit(b.x,b.y,b.w,b.h,px,py) then
                     if b.kind==1 then
                         M_NIGHT=not M_NIGHT
@@ -449,5 +472,6 @@ function onDraw()
 
     press(t1x,t1y,p1p,p1)
     press(t2x,t2y,p2p,p2)
+
     p1p,p2p=p1,p2
 end
