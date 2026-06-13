@@ -37,27 +37,27 @@ function onTick()
     -- Real-time physical acceleration tracking (m/s^2)
     local currentAccel = (speed - lastSpeed) * TICKS_PER_SEC
     local absSpeed = math.abs(speed)
-    
-    -- Direction vector based on velocity movement
-    local dirSign = 1
-    if speed < -0.05 then dirSign = -1 end
 
     local finalBrakeDemand = math.max(handleFric, handleRegen)
     local rawThrottleDemand = handlePower
 
     ------------------------------------------------------------------------
-    -- DYNAMIC INCLINE VECTORING
+    -- DYNAMIC INCLINE VECTORING & TURN FILTERING
     ------------------------------------------------------------------------
-    -- Gravity vector computation: Positive tilt = nose up (climbing)
     local radTilt = math.rad(tiltDeg)
     local gravityForceFactor = math.sin(radTilt)
+
+    -- Centripetal Noise Filter: If the train is changing speed smoothly but tilt spikes,
+    -- damp the gravity factor so turns don't fool the incline scaling.
+    if math.abs(currentAccel) < 0.2 and math.abs(gravityForceFactor) > 0.1 then
+        gravityForceFactor = gravityForceFactor * 0.3
+    end
 
     -- Scale target acceleration windows based on slope angles
     local liveMaxAccel = clamp(TARGET_ACCEL_MAX - (gravityForceFactor * 1.5), TARGET_ACCEL_MIN, 1.5)
     local liveMaxDecel = clamp(TARGET_DECEL_MAX + (gravityForceFactor * 1.2), TARGET_DECEL_MIN, 1.4)
 
-    local currentPerformance = math.abs(currentAccel)
-    local tuneRate = 0.008 -- Sensitivity adjustment multiplier
+    local tuneRate = 0.012 -- Slightly increased for faster response in turns
 
     local throttleOut = 0.0
     local brakeFricOut = 0.0
@@ -67,54 +67,56 @@ function onTick()
     local coast = rawThrottleDemand < 0.01 and finalBrakeDemand < 0.01
 
     if coast then
-        -- Initialize the Coasting Speed-Set target the frame handles are released
         if not wasCoasting then
             coastTargetSpeed = absSpeed
             wasCoasting = true
         end
 
-        -- DYNAMIC MOMENTUM SIMULATION FOR HILLS
-        -- We shift the target speed directly by the gravity slope.
-        -- Uphill (gravity > 0): The target speed sags down, forcing the train to slow down.
-        -- Downhill (gravity < 0): The target speed shifts up, allowing the speed to raise.
+        -- Dynamic coast targets for hills
         local liveCoastTarget = coastTargetSpeed - (gravityForceFactor * 4.0)
-
-        -- Gentle maintenance loop to overcome basic flat-ground rolling drag
         local speedError = liveCoastTarget - absSpeed
         
-        -- Very low gain loop so the engine smoothly and loosely holds speed
-        tuneThrottle = clamp(tuneThrottle + (speedError * 0.004), 0.0, 0.35)
+        -- Speed-holding logic
+        if speedError > 0 then
+            -- Train is below target speed: Apply gentle throttle to maintain
+            tuneThrottle = clamp(tuneThrottle + (speedError * 0.005), 0.0, 0.40)
+            throttleOut = tuneThrottle
+        else
+            -- Train is over target speed (rolling downhill): Let gravity roll it out
+            tuneThrottle = clamp(tuneThrottle - 0.01, 0.0, 0.40)
+            throttleOut = tuneThrottle
+        end
         
-        throttleOut = tuneThrottle
-        brakeFricOut = 0.0  -- No physical mechanical drag brakes applied while coasting
+        brakeFricOut = 0.0
         brakeRegenOut = 0.0
         tuneBrake = 0.0
     else
-        -- Break out of speed-set memory if driver uses power or brakes
         wasCoasting = false
         
         if rawThrottleDemand > 0 then
-            -- Active Power Autotune Loop
+            -- Active Power Autotune Loop (FIXED: Uses raw currentAccel)
             local targetAccel = rawThrottleDemand * liveMaxAccel
-            local error = targetAccel - currentPerformance
+            local error = targetAccel - currentAccel
+            
             tuneThrottle = clamp(tuneThrottle + (error * tuneRate), 0.0, 1.0)
             tuneBrake = 0.0
     
             throttleOut = tuneThrottle
         elseif finalBrakeDemand > 0 then
-            -- Active Service Brake Autotune Loop
+            -- Active Service Brake Autotune Loop (FIXED: Converts deceleration to positive value)
             local targetDecel = finalBrakeDemand * liveMaxDecel
-            local error = targetDecel - currentPerformance
+            local measuredDecel = -currentAccel
+            local error = targetDecel - measuredDecel
+            
             tuneBrake = clamp(tuneBrake + (error * tuneRate), 0.0, 1.0)
             tuneThrottle = 0.0
     
-            -- Map physical handle splits directly to actuator lines
             brakeFricOut = handleFric * tuneBrake
             brakeRegenOut = handleRegen * tuneBrake
         end
     end
 
-    -- Hard overspeed structural safety clamp
+    -- Hard overspeed safety clamp
     if absSpeed >= MAX_SPEED_MS then
         throttleOut = 0.0
     end
@@ -124,7 +126,6 @@ function onTick()
     sn(2, clamp(brakeFricOut, 0, 1))
     sn(3, clamp(brakeRegenOut, 0, 1))
 
-    -- Simple indicator line to map back to dashboard setups
     sb(1, coast)
 
     lastSpeed = speed
