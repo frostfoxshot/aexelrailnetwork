@@ -32,9 +32,9 @@ function onTick()
     local handleFric   = gn(2) or 0 -- Friction brake handle input (0 to 1)
     local handleRegen  = gn(3) or 0 -- Regen brake handle input (0 to 1)
     local speed        = gn(4) or 0 -- Velocity speed in m/s
-    local tiltDeg      = gn(5) or 0 -- Tilt input in degrees
+    local tiltDeg      = gn(5) or 0 -- Tilt input in degrees (Defaults to 0 if uninstalled)
 
-    -- Real-time physical acceleration tracking (m/s^2)
+    -- Real-time physical directional acceleration tracking (m/s^2)
     local currentAccel = (speed - lastSpeed) * TICKS_PER_SEC
     local absSpeed = math.abs(speed)
 
@@ -42,22 +42,16 @@ function onTick()
     local rawThrottleDemand = handlePower
 
     ------------------------------------------------------------------------
-    -- DYNAMIC INCLINE VECTORING & TURN FILTERING
+    -- DYNAMIC INCLINE VECTORING
     ------------------------------------------------------------------------
     local radTilt = math.rad(tiltDeg)
     local gravityForceFactor = math.sin(radTilt)
 
-    -- Centripetal Noise Filter: If the train is changing speed smoothly but tilt spikes,
-    -- damp the gravity factor so turns don't fool the incline scaling.
-    if math.abs(currentAccel) < 0.2 and math.abs(gravityForceFactor) > 0.1 then
-        gravityForceFactor = gravityForceFactor * 0.3
-    end
-
-    -- Scale target acceleration windows based on slope angles
+    -- Scale target acceleration windows based on slope angles (Will default to base values when tilt is 0)
     local liveMaxAccel = clamp(TARGET_ACCEL_MAX - (gravityForceFactor * 1.5), TARGET_ACCEL_MIN, 1.5)
     local liveMaxDecel = clamp(TARGET_DECEL_MAX + (gravityForceFactor * 1.2), TARGET_DECEL_MIN, 1.4)
 
-    local tuneRate = 0.012 -- Slightly increased for faster response in turns
+    local tuneRate = 0.012 -- High sensitivity to respond instantly to turn drag
 
     local throttleOut = 0.0
     local brakeFricOut = 0.0
@@ -72,17 +66,17 @@ function onTick()
             wasCoasting = true
         end
 
-        -- Dynamic coast targets for hills
+        -- Dynamic coast targets for hills (Becomes a perfect flat-ground cruise control when tilt is 0)
         local liveCoastTarget = coastTargetSpeed - (gravityForceFactor * 4.0)
         local speedError = liveCoastTarget - absSpeed
         
-        -- Speed-holding logic
+        -- Speed-holding logic to fight rolling/track friction
         if speedError > 0 then
-            -- Train is below target speed: Apply gentle throttle to maintain
+            -- Train dropped below target speed (like in a turn): Apply power to maintain speed
             tuneThrottle = clamp(tuneThrottle + (speedError * 0.005), 0.0, 0.40)
             throttleOut = tuneThrottle
         else
-            -- Train is over target speed (rolling downhill): Let gravity roll it out
+            -- Train is exceeding target speed (rolling downhill): Drop throttle completely
             tuneThrottle = clamp(tuneThrottle - 0.01, 0.0, 0.40)
             throttleOut = tuneThrottle
         end
@@ -94,7 +88,7 @@ function onTick()
         wasCoasting = false
         
         if rawThrottleDemand > 0 then
-            -- Active Power Autotune Loop (FIXED: Uses raw currentAccel)
+            -- Active Power Autotune Loop (Uses raw directional acceleration)
             local targetAccel = rawThrottleDemand * liveMaxAccel
             local error = targetAccel - currentAccel
             
@@ -103,7 +97,7 @@ function onTick()
     
             throttleOut = tuneThrottle
         elseif finalBrakeDemand > 0 then
-            -- Active Service Brake Autotune Loop (FIXED: Converts deceleration to positive value)
+            -- Active Service Brake Autotune Loop
             local targetDecel = finalBrakeDemand * liveMaxDecel
             local measuredDecel = -currentAccel
             local error = targetDecel - measuredDecel
@@ -116,7 +110,7 @@ function onTick()
         end
     end
 
-    -- Hard overspeed safety clamp
+    -- Hard overspeed structural safety clamp
     if absSpeed >= MAX_SPEED_MS then
         throttleOut = 0.0
     end
