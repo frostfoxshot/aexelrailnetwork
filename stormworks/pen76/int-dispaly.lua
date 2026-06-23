@@ -19,6 +19,27 @@ stations = {
     [17] = "TEST TRAIN"
 }
 
+stationsQR = {
+    [0]  = "OUT OF SERVICE",
+    [1]  = "COOMERA",
+    [2]  = "FERNY GROVE",
+    [3]  = "BOWEN HILLS",
+    [4]  = "HELENSVALE",
+    [5]  = "CLEVELAND",
+    [6]  = "LOGANLEA",
+    [7]  = "VARSITY LAKES",
+    [8]  = "IPSWICH",
+    [9]  = "DOOMBEN",
+    [10] = "ROMA STREET",
+    [11] = "MANLY",
+    [12] = "WULKURAKA",
+    [13] = "BEENLEIGH",
+    [14] = "BRISBANE AIRPORT",
+    [15] = "ROSEWOOD",
+    [16] = "ORMEAU",
+    [17] = "TEST TRAIN"
+}
+
 -- =========================
 -- Custom font setup
 -- =========================
@@ -164,6 +185,7 @@ mapY = 0
 destIndex = 0
 headingTurns = 0
 displayOn = true
+useQRNames = false
 
 pageTimer = 0
 testPage = 1
@@ -214,8 +236,6 @@ function drawPill(x, y, w, h, br, bg, bb, tr, tg, tb, text)
 end
 
 function drawTrainArrow(cx, cy, size, turns)
-    -- Stormworks compass-style turns: 0..1
-    -- 0 = up, 0.25 = right, 0.5 = down, 0.75 = left
     local a = turns * pi2 - pih
 
     local tipX = cx + co(a) * size
@@ -242,8 +262,10 @@ function onTick()
     headingTurns  = input.getNumber(6) or 0
 
     displayOn     = input.getBool(1)
+    useQRNames    = input.getBool(3)
 
-    if stations[destIndex] == nil then
+    local activeTable = useQRNames and stationsQR or stations
+    if activeTable[destIndex] == nil then
         destIndex = 0
     end
 
@@ -332,6 +354,7 @@ function onDraw()
     drawPill(w - speedW - 2, pillY, speedW, pillH, 35, 35, 35, 255, 255, 255, speedText)
 
     -- bottom destination/status
+    local activeTable = useQRNames and stationsQR or stations
     screen.setColor(255, 255, 255)
-    screen.drawTextBox(2, h - bottomBarH + 1, w - 4, bottomBarH - 2, stations[destIndex], 0, 0)
+    screen.drawTextBox(2, h - bottomBarH + 1, w - 4, bottomBarH - 2, activeTable[destIndex], 0, 0)
 end
