@@ -37,6 +37,27 @@ stations = {
     [17] = "TEST TRAIN"
 }
 
+stationsQR = {
+    [0]  = "OUT OF SERVICE",
+    [1]  = "COOMERA",
+    [2]  = "FERNY GROVE",
+    [3]  = "BOWEN HILLS",
+    [4]  = "HELENSVALE",
+    [5]  = "CLEVELAND",
+    [6]  = "LOGANLEA",
+    [7]  = "VARSITY LAKES",
+    [8]  = "IPSWICH",
+    [9]  = "DOOMBEN",
+    [10] = "ROMA STREET",
+    [11] = "MANLY",
+    [12] = "WULKURAKA",
+    [13] = "BEENLEIGH",
+    [14] = "BRISBANE AIRPORT",
+    [15] = "ROSEWOOD",
+    [16] = "ORMEAU",
+    [17] = "TEST TRAIN"
+}
+
 chr={
     A={{0,0,2,1,2,0,"",1,3},{9,-1,-8,0,8,1,"",5,0}},
     B={{0,4,0,-2,2,0,-4,0},{0,0,2,2,2,3,0,-9}},
@@ -169,12 +190,14 @@ runningNumber = 0
 destIndex = 0
 useOrange = true
 displayOn = true
+useQRNames = false
 
 function onTick()
     runningNumber = M.floor(input.getNumber(1) or 0)
     destIndex = M.floor(input.getNumber(2) or 0)
     useOrange = input.getBool(1)
     displayOn = input.getBool(2)
+    useQRNames = input.getBool(3)
 end
 
 function onDraw()
@@ -195,7 +218,9 @@ function onDraw()
     end
 
     local runText = pad5(runningNumber)
-    local destText = stations[destIndex] or "OUT OF SERVICE"
+    
+    local activeTable = useQRNames and stationsQR or stations
+    local destText = activeTable[destIndex] or "OUT OF SERVICE"
 
     -- running number top-left
     S.drawText(1,1,runText)
